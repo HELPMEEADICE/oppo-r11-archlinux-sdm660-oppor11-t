@@ -1,0 +1,12 @@
+*
+!.gitignore
+!README.md
+!OPPO_R11T_WIFI_MAINLINE_BRINGUP.md
+!initramfs/
+!initramfs/**
+!scripts/
+!scripts/**
+
+# Rebuild these static diagnostic binaries from their adjacent sources.
+initramfs/gpu-msm-probe
+initramfs/gpu-smoke

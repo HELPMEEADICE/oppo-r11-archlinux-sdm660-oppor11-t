@@ -1,0 +1,327 @@
+#!/bin/busybox sh
+
+/bin/busybox --install -s /bin
+
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t configfs configfs /sys/kernel/config
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+
+hostname r11t-mainline
+echo 8 > /proc/sys/kernel/printk
+
+# USB console first — keep this independent of display bring-up.
+G=/sys/kernel/config/usb_gadget/r11t
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409"
+echo 0x18d1 > "$G/idVendor"
+echo 0xd001 > "$G/idProduct"
+echo r11t-mainline > "$G/strings/0x409/serialnumber"
+echo OPPO > "$G/strings/0x409/manufacturer"
+echo "R11T mainline console" > "$G/strings/0x409/product"
+echo "USB serial console" > "$G/configs/c.1/strings/0x409/configuration"
+mkdir -p "$G/functions/acm.usb0"
+ln -s "$G/functions/acm.usb0" "$G/configs/c.1/acm.usb0"
+
+set -- /sys/class/udc/*
+if [ -e "$1" ]; then
+	echo "${1##*/}" > "$G/UDC"
+fi
+
+# Resolve eMMC by label; mainline may expose mmcblk0 or mmcblk1.
+resolve_part() {
+	name="$1"
+	for d in /dev/block/by-name /dev/disk/by-partlabel /sys/class/block; do
+		if [ -e "$d/$name" ]; then
+			readlink -f "$d/$name" 2>/dev/null && return 0
+		fi
+	done
+	for b in /sys/class/block/mmcblk*p*; do
+		[ -e "$b/uevent" ] || continue
+		partname=$(sed -n 's/^PARTNAME=//p' "$b/uevent" 2>/dev/null)
+		[ "$partname" = "$name" ] || continue
+		echo "/dev/${b##*/}"
+		return 0
+	done
+	return 1
+}
+
+mkdir -p /mnt/vendor /mnt/modem /lib/firmware /lib/modules
+VENDOR_DEV=$(resolve_part vendor)
+MODEM_DEV=$(resolve_part modem)
+if [ -n "$VENDOR_DEV" ]; then
+	mount -t ext4 -o ro "$VENDOR_DEV" /mnt/vendor 2>/dev/null || true
+fi
+if [ -n "$MODEM_DEV" ]; then
+	mount -t vfat -o ro "$MODEM_DEV" /mnt/modem 2>/dev/null || true
+fi
+
+# Prefer packaged firmware; fall back to vendor/modem mounts.
+printf %s /lib/firmware > /sys/module/firmware_class/parameters/path 2>/dev/null
+if [ -d /mnt/vendor/firmware ]; then
+	# Extra search path for any missing blobs still only on vendor.
+	:
+fi
+if [ -d /mnt/modem/image ]; then
+	ln -sfn /mnt/modem/image /lib/firmware/image 2>/dev/null
+	# MSS remoteproc often looks for mba.mbn/modem.mdt at firmware root.
+	for f in mba.mbn modem.mdt; do
+		[ -f "/mnt/modem/image/$f" ] && ln -sf "/mnt/modem/image/$f" "/lib/firmware/$f"
+	done
+	for f in /mnt/modem/image/modem.b*; do
+		[ -f "$f" ] || continue
+		ln -sf "$f" "/lib/firmware/$(basename "$f")"
+	done
+fi
+
+insmod /lib/modules/rmi_core.ko 2>/dev/null
+insmod /lib/modules/rmi_i2c.ko 2>/dev/null
+
+cat > /bin/load_display << 'EOF'
+#!/bin/busybox sh
+for m in mdt_loader ocmem ubwc_config llcc-qcom qcom_aoss qcom-oledb-regulator drm_exec gpu-sched drm_gpuvm cec drm_display_helper drm_dp_aux_bus panel-samsung-s6e3fa3 msm; do
+	[ -f "/lib/modules/${m}.ko" ] || continue
+	echo "insmod $m"
+	insmod "/lib/modules/${m}.ko" || echo "FAILED $m"
+done
+for b in /sys/class/backlight/*/brightness; do
+	[ -e "$b" ] || continue
+	echo 180 > "$b" 2>/dev/null
+done
+dmesg | grep -Ei "msm|mdss|dsi|panel|s6e3|drm|sde|gpu|firmware|a512|zap|error|fail" | tail -n 120
+ls -l /dev/dri /sys/class/drm /sys/class/backlight 2>/dev/null
+EOF
+chmod 0755 /bin/load_display
+
+cat > /bin/test_display << 'EOF'
+#!/bin/busybox sh
+stride=$(cat /sys/class/graphics/fb0/stride 2>/dev/null)
+[ -n "$stride" ] || { echo "fb0 is unavailable; run load_display first"; exit 1; }
+height=1920
+size=$((stride * height))
+mkdir -p /tmp
+dd if=/dev/zero bs="$stride" count="$height" 2>/dev/null | tr '\000' '\377' > /tmp/r11t-white.raw
+actual=$(wc -c < /tmp/r11t-white.raw)
+[ "$actual" -eq "$size" ] || { echo "short frame: $actual/$size"; exit 1; }
+dd if=/tmp/r11t-white.raw of=/dev/fb0 bs="$stride" count="$height"
+echo 1 > /sys/class/graphics/fb0/blank
+sleep 1
+echo 0 > /sys/class/graphics/fb0/blank
+echo "Displayed $size-byte white frame"
+EOF
+chmod 0755 /bin/test_display
+
+cat > /bin/test_touch << 'EOF'
+#!/bin/busybox sh
+echo "=== RMI devices ==="
+ls -l /sys/bus/rmi/devices 2>/dev/null
+echo "=== input devices ==="
+for d in /sys/class/input/event*; do
+	[ -e "$d/device/name" ] || continue
+	printf "%s: " "${d##*/}"
+	cat "$d/device/name"
+done
+echo "=== dmesg rmi/syna ==="
+dmesg | grep -Ei "rmi|syna|s3508|bootloader|touch" | tail -n 80
+echo "=== live events (5s, touch the panel) ==="
+timeout 5 cat /dev/input/event0 /dev/input/event1 /dev/input/event2 /dev/input/event3 2>/dev/null | hexdump -C | head -n 40
+EOF
+chmod 0755 /bin/test_touch
+
+cat > /bin/test_gpu << 'EOF'
+#!/bin/busybox sh
+if ! lsmod | grep -q '^msm '; then
+	load_display
+fi
+ls -l /dev/dri 2>/dev/null
+if [ -x /bin/gpu-msm-probe ]; then
+	/bin/gpu-msm-probe
+else
+	echo "gpu-msm-probe missing"
+	exit 1
+fi
+dmesg | grep -Ei "adreno|a512|a530|zap|gpu|firmware" | tail -n 60
+EOF
+chmod 0755 /bin/test_gpu
+
+cat > /bin/test_wifi << 'EOF'
+#!/bin/busybox sh
+export LD_LIBRARY_PATH=/lib:/usr/lib:${LD_LIBRARY_PATH}
+
+echo "=== prepare partitions and firmware ==="
+mkdir -p /dev/disk/by-partlabel
+for retry in $(seq 1 20); do
+	for b in /sys/class/block/mmcblk*p*; do
+		[ -e "$b/uevent" ] || continue
+		partname=$(sed -n 's/^PARTNAME=//p' "$b/uevent" 2>/dev/null)
+		[ -n "$partname" ] || continue
+		ln -sfn "/dev/${b##*/}" "/dev/disk/by-partlabel/$partname"
+	done
+	[ -e /dev/disk/by-partlabel/modem ] && break
+	sleep 1
+done
+mkdir -p /mnt/modem /lib/firmware
+if ! mountpoint -q /mnt/modem; then
+	mount -t vfat -o ro "$(readlink -f /dev/disk/by-partlabel/modem)" /mnt/modem || exit 1
+fi
+for f in mba.mbn modem.mdt wlanmdsp.mbn; do
+	[ -f "/mnt/modem/image/$f" ] || { echo "missing modem firmware $f"; exit 1; }
+	ln -sfn "/mnt/modem/image/$f" "/lib/firmware/$f"
+done
+ln -sfn /mnt/modem/image /lib/firmware/image
+[ -d /mnt/modem/image/modem_pr ] && \
+	ln -sfn /mnt/modem/image/modem_pr /lib/firmware/modem_pr
+for f in /mnt/modem/image/modem.b*; do
+	[ -f "$f" ] && ln -sfn "$f" "/lib/firmware/$(basename "$f")"
+done
+
+echo "=== load transport stack ==="
+for m in rmtfs_mem libarc4 rfkill cfg80211 mac80211 ath qmi_helpers qrtr qrtr-smd qcom_pdr_msg pdr_interface qcom-r11t-memshare qcom_pd_mapper mdt_loader qcom_pil_info qcom_common qcom_aoss qcom_sysmon ipa2-lite qcom_q6v5 qcom_q6v5_mss; do
+	[ -f "/lib/modules/${m}.ko" ] || { echo "missing $m.ko"; continue; }
+	insmod "/lib/modules/${m}.ko" 2>/dev/null || true
+done
+
+# Coredump mode must be selected before rmtfs -s starts the modem.
+for i in $(seq 1 50); do
+	for r in /sys/class/remoteproc/remoteproc*; do
+		[ -e "$r/name" ] || continue
+		case "$(cat "$r/name" 2>/dev/null)" in
+		*4080000*|*mss*|*modem*)
+			echo enabled > "$r/coredump" 2>/dev/null || true
+			echo disabled > "$r/recovery" 2>/dev/null || true
+			echo "remoteproc coredump=$(cat "$r/coredump" 2>/dev/null)"
+			MSS_RPROC="$r"
+			break 2
+			;;
+		esac
+	done
+	sleep 0.1
+done
+[ -n "${MSS_RPROC:-}" ] || echo "remoteproc coredump setup timed out"
+
+# DIAG must be listening before MSS starts on known-working SDM660 systems.
+mkdir -p /tmp
+if [ -x /bin/diag-router ] && ! pidof diag-router >/dev/null 2>&1; then
+	/bin/diag-router >/tmp/diag-router.log 2>&1 &
+	sleep 1
+	echo "diag-router pid=$(pidof diag-router)"
+fi
+
+# Publish the modem TFTP service before rmtfs starts MSS.
+mkdir -p /tmp /var/lib/tqftpserv
+if [ -x /bin/tqftpserv ] && ! pidof tqftpserv >/dev/null 2>&1; then
+	/bin/tqftpserv -d >/tmp/tqftpserv.log 2>&1 &
+	sleep 1
+	echo "tqftpserv pid=$(pidof tqftpserv)"
+fi
+
+# Expose modem EFS partitions by label for rmtfs -P.
+ls -l /dev/disk/by-partlabel/modemst1 /dev/disk/by-partlabel/modemst2 /dev/qcom_rmtfs_mem1 2>/dev/null || true
+
+# Publish RMTFS before ath10k starts MSS so modem NV/EFS requests can be answered.
+mkdir -p /tmp /boot
+# Ensure OPPO NV partition aliases used by rmtfs
+for pair in "oem_stanvbk:oppostanvbk" "oem_dycnvbk:oppodycnvbk"; do
+	label=${pair%%:*}; src=${pair##*:}
+	if [ -e "/dev/disk/by-partlabel/$src" ]; then
+		target=$(readlink -f "/dev/disk/by-partlabel/$src")
+		ln -sfn "$target" "/dev/disk/by-partlabel/$label"
+	fi
+done
+ls -l /dev/disk/by-partlabel/oppostanvbk /dev/disk/by-partlabel/oppodycnvbk /dev/disk/by-partlabel/oem_stanvbk 2>/dev/null || true
+if [ -x /bin/rmtfs ]; then
+	if ! pidof rmtfs >/dev/null 2>&1; then
+		echo "starting rmtfs"
+		export LD_LIBRARY_PATH=/lib
+		/bin/rmtfs -P -r -v >/tmp/rmtfs.log 2>&1 &
+		sleep 1
+		echo "rmtfs pid=$(pidof rmtfs)"
+		cat /tmp/rmtfs.log 2>/dev/null | tail -n 30
+	fi
+else
+	echo "rmtfs binary missing"
+fi
+
+# ath10k must prepare WLAN MSA and its PDR listener before the first MSS boot.
+echo "loading ath10k before MSS"
+insmod /lib/modules/ath10k_core.ko 2>/dev/null || true
+insmod /lib/modules/ath10k_snoc.ko 2>/dev/null || true
+
+if [ -n "${MSS_RPROC:-}" ]; then
+	echo start > "$MSS_RPROC/state" 2>/dev/null || true
+fi
+sleep 8
+
+for r in /sys/class/remoteproc/remoteproc*; do
+	[ -e "$r/name" ] || continue
+	name=$(cat "$r/name" 2>/dev/null)
+	case "$name" in
+	*4080000*|*mss*|*modem*)
+		state=$(cat "$r/state" 2>/dev/null)
+		echo "remoteproc $name state=$state"
+		echo disabled > "$r/recovery" 2>/dev/null || true
+		;;
+	esac
+done
+sleep 3
+
+if [ -n "${MSS_RPROC:-}" ] && [ "$(cat "$MSS_RPROC/state" 2>/dev/null)" = "crashed" ]; then
+	(
+		for i in $(seq 1 300); do
+			CORE=$(echo /sys/class/devcoredump/devcd*/data)
+			[ -e "$CORE" ] && break
+			sleep 0.1
+		done
+		if [ -e "${CORE:-}" ]; then
+			strings -t x -n 12 "$CORE" |
+				grep -Eai "assert|fatal|panic|exception|error|ipa_bam|software offset|wlan|qurt|watchdog|dog bite|filename|line [0-9]" |
+				tail -n 800 > /tmp/mpss-core-strings.log
+		fi
+	) &
+fi
+
+echo "=== remoteproc ==="
+for r in /sys/class/remoteproc/remoteproc*; do
+	[ -e "$r/name" ] || continue
+	printf "%s name=" "${r##*/}"
+	cat "$r/name" 2>/dev/null
+	printf " state="
+	cat "$r/state" 2>/dev/null
+	echo
+done
+echo "=== qrtr ==="
+ls /sys/bus/qrtr/devices 2>/dev/null
+echo "=== wifi node ==="
+ls -l /sys/bus/platform/devices/*18800000* 2>/dev/null || true
+echo "=== netdevs ==="
+ls /sys/class/net
+if [ -e /sys/class/net/wlan0 ] && [ -x /bin/nl80211-scan ]; then
+	echo "=== nl80211 scan ==="
+	/bin/nl80211-scan wlan0 || true
+fi
+echo "=== dmesg wifi ==="
+dmesg | grep -Ei "ath10k|wcn3990|qmi|qrtr|q6v5|mpss|remoteproc|board_id|chip_id|wlan|firmware|fatal|crash|rmtfs" | tail -n 140
+echo "=== rmtfs log ==="
+cat /tmp/rmtfs.log 2>/dev/null | tail -n 40
+echo "=== tqftpserv log ==="
+cat /tmp/tqftpserv.log 2>/dev/null | tail -n 80
+echo "=== diag-router log ==="
+cat /tmp/diag-router.log 2>/dev/null | tail -n 80
+EOF
+chmod 0755 /bin/test_wifi
+
+# Display stack for fbcon/logo; failures must not kill the USB console.
+/bin/load_display
+
+while [ ! -e /dev/ttyGS0 ]; do
+	sleep 1
+done
+
+stty -F /dev/ttyGS0 raw -echo
+exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
+echo "OPPO R11T mainline Linux diagnostic shell"
+echo "Helpers: test_display | test_touch | test_gpu | test_wifi"
+uname -a
+cat /sys/firmware/devicetree/base/model
+echo
+exec sh

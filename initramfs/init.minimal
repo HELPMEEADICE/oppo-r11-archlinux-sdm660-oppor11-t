@@ -1,0 +1,30 @@
+#!/bin/busybox sh
+/bin/busybox --install -s /bin
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t configfs configfs /sys/kernel/config
+hostname r11t-mainline
+echo 8 > /proc/sys/kernel/printk
+
+G=/sys/kernel/config/usb_gadget/r11t
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409"
+echo 0x18d1 > "$G/idVendor"
+echo 0xd001 > "$G/idProduct"
+echo r11t-mainline > "$G/strings/0x409/serialnumber"
+echo OPPO > "$G/strings/0x409/manufacturer"
+echo "R11T mainline console" > "$G/strings/0x409/product"
+echo "USB serial console" > "$G/configs/c.1/strings/0x409/configuration"
+mkdir -p "$G/functions/acm.usb0"
+ln -s "$G/functions/acm.usb0" "$G/configs/c.1/acm.usb0"
+set -- /sys/class/udc/*
+[ -e "$1" ] && echo "${1##*/}" > "$G/UDC"
+
+while [ ! -e /dev/ttyGS0 ]; do sleep 1; done
+stty -F /dev/ttyGS0 raw -echo
+exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
+echo "MINIMAL BOOT OK"
+uname -a
+cat /sys/firmware/devicetree/base/model
+echo
+exec sh
