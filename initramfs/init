@@ -144,6 +144,62 @@ dmesg | grep -Ei "adreno|a512|a530|zap|gpu|firmware" | tail -n 60
 EOF
 chmod 0755 /bin/test_gpu
 
+cat > /bin/test_bt << 'EOF'
+#!/bin/busybox sh
+
+echo "=== load Bluetooth stack ==="
+for m in ecc ecdh_generic rfkill bluetooth btqca btintel btbcm btrtl crc-ccitt hci_uart; do
+	[ -f "/lib/modules/${m}.ko" ] || { echo "missing $m.ko"; exit 1; }
+	insmod "/lib/modules/${m}.ko" 2>/dev/null || true
+done
+
+for retry in $(seq 1 150); do
+	[ -d /sys/class/bluetooth/hci0 ] && break
+	sleep 0.1
+done
+for retry in $(seq 1 100); do
+	dmesg | grep -q "hci0: QCA setup on UART is completed" && break
+	sleep 0.1
+done
+if ! dmesg | grep -q "hci0: QCA setup on UART is completed"; then
+	echo "QCA initial setup did not complete"
+	dmesg | grep -Ei "Bluetooth|hci|qca|wcn3990|crbtfw|crnv|serdev|c1af000|firmware|regulator|baud" | tail -n 120
+	exit 1
+fi
+sleep 0.5
+
+echo "=== HCI devices ==="
+ls -l /sys/class/bluetooth /sys/bus/serial/devices 2>/dev/null || true
+if [ ! -d /sys/class/bluetooth/hci0 ]; then
+	echo "hci0 did not register"
+	dmesg | grep -Ei "Bluetooth|hci|qca|wcn3990|crbtfw|crnv|serdev|c1af000|firmware|regulator|baud" | tail -n 120
+	exit 1
+fi
+
+echo "=== controller and inquiry ==="
+PERSIST_DEV=""
+for b in /sys/class/block/mmcblk*p*; do
+	[ -e "$b/uevent" ] || continue
+	[ "$(sed -n 's/^PARTNAME=//p' "$b/uevent" 2>/dev/null)" = persist ] || continue
+	PERSIST_DEV="/dev/${b##*/}"
+	break
+done
+mkdir -p /mnt/persist
+if [ -n "$PERSIST_DEV" ] && ! mountpoint -q /mnt/persist; then
+	mount -t ext4 -o ro "$PERSIST_DEV" /mnt/persist || exit 1
+fi
+BT_NV=/mnt/persist/bluetooth/.bt_nv.bin
+[ -r "$BT_NV" ] || { echo "missing $BT_NV"; exit 1; }
+/bin/bt-hci-test "$BT_NV"
+rc=$?
+echo "bt_hci_test_rc=$rc"
+
+echo "=== Bluetooth log ==="
+dmesg | grep -Ei "Bluetooth|hci|qca|wcn3990|crbtfw|crnv|serdev|c1af000|firmware|regulator|baud" | tail -n 160
+exit "$rc"
+EOF
+chmod 0755 /bin/test_bt
+
 cat > /bin/test_wifi << 'EOF'
 #!/bin/busybox sh
 export LD_LIBRARY_PATH=/lib:/usr/lib:${LD_LIBRARY_PATH}
@@ -320,7 +376,7 @@ done
 stty -F /dev/ttyGS0 raw -echo
 exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
 echo "OPPO R11T mainline Linux diagnostic shell"
-echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi"
+echo "Helpers: test_keys | test_display | test_touch | test_gpu | test_wifi | test_bt"
 uname -a
 cat /sys/firmware/devicetree/base/model
 echo

@@ -31,6 +31,9 @@ llvm-strip "$IR/bin/nl80211-scan"
 aarch64-linux-gnu-gcc -static -Os -Wall -Wextra \
 	-o "$IR/bin/test_keys" "$SRC_INIT/key-test.c"
 llvm-strip "$IR/bin/test_keys"
+aarch64-linux-gnu-gcc -static -Os -Wall -Wextra \
+	-o "$IR/bin/bt-hci-test" "$SRC_INIT/bt-hci-test.c"
+llvm-strip "$IR/bin/bt-hci-test"
 if [ -x /tmp/opencode/tqftpserv/tqftpserv.static ]; then
 	cp -a /tmp/opencode/tqftpserv/tqftpserv.static "$IR/bin/tqftpserv"
 fi
@@ -85,6 +88,16 @@ mods=(
 	"$BUILD/drivers/remoteproc/qcom_q6v5_mss.ko"
 	"$BUILD/drivers/net/wireless/ath/ath10k/ath10k_core.ko"
 	"$BUILD/drivers/net/wireless/ath/ath10k/ath10k_snoc.ko"
+	# Bluetooth stack (hci_qca is linked into hci_uart.ko)
+	"$BUILD/crypto/ecc.ko"
+	"$BUILD/crypto/ecdh_generic.ko"
+	"$BUILD/lib/crc/crc-ccitt.ko"
+	"$BUILD/net/bluetooth/bluetooth.ko"
+	"$BUILD/drivers/bluetooth/btqca.ko"
+	"$BUILD/drivers/bluetooth/btintel.ko"
+	"$BUILD/drivers/bluetooth/btbcm.ko"
+	"$BUILD/drivers/bluetooth/btrtl.ko"
+	"$BUILD/drivers/bluetooth/hci_uart.ko"
 )
 
 rm -f "$IR"/lib/modules/*.ko
@@ -119,6 +132,11 @@ cp -a /usr/lib/firmware/ath10k/WCN3990/hw1.0/board-2.bin \
 # R11T BDF reference (for later board-2 packaging; not consumed raw by ath10k).
 cp -a "$ROOT"/device-info/firmware/wifi/bdwlan_16051.bin \
 	"$IR/lib/firmware/ath10k/WCN3990/hw1.0/" || true
+
+# WCN3990 Bluetooth rampatch and NVM.
+mkdir -p "$IR/lib/firmware/qca"
+cp -a /usr/lib/firmware/qca/crbtfw21.tlv "$IR/lib/firmware/qca/"
+cp -a /usr/lib/firmware/qca/crnv21.bin "$IR/lib/firmware/qca/"
 
 # Regulatory DB if present on host or staged under /tmp/opencode.
 for f in /tmp/opencode/regulatory.db /tmp/opencode/regulatory.db.p7s \
