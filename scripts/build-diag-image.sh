@@ -34,6 +34,9 @@ llvm-strip "$IR/bin/test_keys"
 aarch64-linux-gnu-gcc -static -Os -Wall -Wextra \
 	-o "$IR/bin/bt-hci-test" "$SRC_INIT/bt-hci-test.c"
 llvm-strip "$IR/bin/bt-hci-test"
+aarch64-linux-gnu-gcc -static -Os -Wall -Wextra -Werror \
+	-o "$IR/bin/wifi-mac" "$SRC_INIT/wifi-mac.c"
+llvm-strip "$IR/bin/wifi-mac"
 if [ -x /tmp/opencode/tqftpserv/tqftpserv.static ]; then
 	cp -a /tmp/opencode/tqftpserv/tqftpserv.static "$IR/bin/tqftpserv"
 fi

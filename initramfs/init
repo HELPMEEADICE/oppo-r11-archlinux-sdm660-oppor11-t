@@ -306,6 +306,17 @@ insmod /lib/modules/ath10k_snoc.ko 2>/dev/null || true
 if [ -n "${MSS_RPROC:-}" ]; then
 	echo start > "$MSS_RPROC/state" 2>/dev/null || true
 fi
+echo "=== factory WLAN MAC ==="
+WLAN_MAC=$(/bin/wifi-mac) || {
+	echo "failed to read WLAN MAC from modem DMS"
+	exit 1
+}
+if [ ! -w /sys/module/ath10k_snoc/parameters/mac_addr ]; then
+	echo "ath10k_snoc MAC parameter is unavailable"
+	exit 1
+fi
+printf '%s' "$WLAN_MAC" > /sys/module/ath10k_snoc/parameters/mac_addr || exit 1
+echo "factory WLAN MAC provisioned: $WLAN_MAC"
 sleep 8
 
 for r in /sys/class/remoteproc/remoteproc*; do
@@ -334,6 +345,21 @@ if [ -n "${MSS_RPROC:-}" ] && [ "$(cat "$MSS_RPROC/state" 2>/dev/null)" = "crash
 				tail -n 800 > /tmp/mpss-core-strings.log
 		fi
 	) &
+fi
+
+for retry in $(seq 1 150); do
+	[ -e /sys/class/net/wlan0/address ] && break
+	sleep 0.1
+done
+if [ ! -e /sys/class/net/wlan0/address ]; then
+	echo "wlan0 did not register"
+	exit 1
+fi
+APPLIED_WLAN_MAC=$(cat /sys/class/net/wlan0/address)
+echo "registered WLAN MAC: $APPLIED_WLAN_MAC"
+if [ "$APPLIED_WLAN_MAC" != "$WLAN_MAC" ]; then
+	echo "WLAN MAC verification failed"
+	exit 1
 fi
 
 echo "=== remoteproc ==="
