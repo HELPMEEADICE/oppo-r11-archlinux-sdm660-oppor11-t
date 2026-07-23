@@ -8,6 +8,7 @@ iwd
 iptables
 bluez
 bluez-utils
+bluedevil
 plasma-desktop
 plasma-workspace
 plasma-keyboard
