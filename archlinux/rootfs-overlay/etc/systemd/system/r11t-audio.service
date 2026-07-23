@@ -1,0 +1,12 @@
+[Unit]
+Description=Initialize OPPO R11T ADSP and ALSA card
+Requires=r11t-transport.service
+After=r11t-transport.service r11t-rmtfs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/r11t/start-audio
+
+[Install]
+WantedBy=r11t-hardware.target

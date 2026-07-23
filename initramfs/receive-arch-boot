@@ -1,0 +1,91 @@
+#!/bin/busybox sh
+set -eu
+
+usage() {
+	echo "usage: $0 --bytes N --sha256 HASH --confirm" >&2
+	exit 2
+}
+
+BYTES=
+EXPECTED_HASH=
+CONFIRM=0
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--bytes) BYTES=${2:-}; shift 2 ;;
+	--sha256) EXPECTED_HASH=${2:-}; shift 2 ;;
+	--confirm) CONFIRM=1; shift ;;
+	*) usage ;;
+	esac
+done
+
+[ "$CONFIRM" -eq 1 ] || { echo 'ERROR: --confirm is required' >&2; exit 1; }
+case " $(cat /proc/cmdline) " in
+	*' r11t.storage_write=1 '*) ;;
+	*) echo 'ERROR: this recovery image has storage writes disabled' >&2; exit 1 ;;
+esac
+case "$BYTES" in ''|*[!0-9]*) usage ;; esac
+case "$EXPECTED_HASH" in ''|*[!0-9a-f]*) usage ;; esac
+[ "${#EXPECTED_HASH}" -eq 64 ] || usage
+[ $((BYTES % 4096)) -eq 0 ] || {
+	echo 'ERROR: image size must be 4096-byte aligned' >&2
+	exit 1
+}
+[ "$BYTES" -le 67108864 ] || { echo 'ERROR: image exceeds boot partition' >&2; exit 1; }
+
+resolve_part() {
+	name=$1
+	for block in /sys/class/block/mmcblk*p*; do
+		[ -r "$block/uevent" ] || continue
+		[ "$(sed -n 's/^PARTNAME=//p' "$block/uevent")" = "$name" ] || continue
+		echo "/dev/${block##*/}"
+		return 0
+	done
+	return 1
+}
+
+BOOT=$(resolve_part boot)
+BOOTBAK=$(resolve_part bootbak)
+for dev in "$BOOT" "$BOOTBAK"; do
+	sectors=$(cat "/sys/class/block/${dev##*/}/size")
+	[ "$sectors" = 131072 ] || {
+		echo "ERROR: unexpected size for $dev: $sectors sectors" >&2
+		exit 1
+	}
+done
+
+PAGES=$((BYTES / 4096))
+TMP=/tmp/r11t-new-boot.img
+rm -f "$TMP"
+echo "Listening on 172.31.66.1:5555 for $BYTES decompressed boot bytes"
+export LD_LIBRARY_PATH=/lib
+nc -l -p 5555 | zstd -d -c | dd of="$TMP" bs=4096 count="$PAGES" conv=fsync
+
+RECEIVED_HASH=$(sha256sum "$TMP" | cut -d' ' -f1)
+[ "$RECEIVED_HASH" = "$EXPECTED_HASH" ] || {
+	echo "ERROR: received boot mismatch: $RECEIVED_HASH" >&2
+	exit 1
+}
+[ "$(dd if="$TMP" bs=8 count=1 status=none)" = 'ANDROID!' ] || {
+	echo 'ERROR: received file is not an Android boot image' >&2
+	exit 1
+}
+
+echo 'Backing up the complete current boot partition to bootbak'
+dd if="$BOOT" of="$BOOTBAK" bs=4096 count=16384 conv=fsync status=none
+BOOT_HASH=$(sha256sum "$BOOT" | cut -d' ' -f1)
+BOOTBAK_HASH=$(sha256sum "$BOOTBAK" | cut -d' ' -f1)
+[ "$BOOT_HASH" = "$BOOTBAK_HASH" ] || {
+	echo 'ERROR: bootbak verification failed' >&2
+	exit 1
+}
+
+dd if="$TMP" of="$BOOT" bs=4096 count="$PAGES" conv=fsync status=none
+READBACK_HASH=$(dd if="$BOOT" bs=4096 count="$PAGES" status=none | \
+	sha256sum | cut -d' ' -f1)
+[ "$READBACK_HASH" = "$EXPECTED_HASH" ] || {
+	echo "ERROR: boot readback mismatch: $READBACK_HASH" >&2
+	exit 1
+}
+rm -f "$TMP"
+echo "Verified new boot image: $READBACK_HASH"
+echo "Verified previous boot in bootbak: $BOOTBAK_HASH"

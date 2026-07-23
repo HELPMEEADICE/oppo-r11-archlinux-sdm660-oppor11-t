@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+mountpoint -q /sys/kernel/config || mount -t configfs configfs /sys/kernel/config
+
+g=/sys/kernel/config/usb_gadget/r11t
+mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
+printf '%s' 0x18d1 > "$g/idVendor"
+printf '%s' 0xd003 > "$g/idProduct"
+printf '%s' r11t-arch > "$g/strings/0x409/serialnumber"
+printf '%s' OPPO > "$g/strings/0x409/manufacturer"
+printf '%s' 'R11T Arch Linux ARM' > "$g/strings/0x409/product"
+printf '%s' 'ACM console' > "$g/configs/c.1/strings/0x409/configuration"
+mkdir -p "$g/functions/acm.usb0"
+[ -e "$g/configs/c.1/acm.usb0" ] || \
+	ln -s "$g/functions/acm.usb0" "$g/configs/c.1/acm.usb0"
+
+set -- /sys/class/udc/*
+[ -e "$1" ] || exit 1
+[ -n "$(cat "$g/UDC")" ] || printf '%s' "${1##*/}" > "$g/UDC"

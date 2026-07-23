@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+modprobe ath10k_core
+modprobe ath10k_snoc
+
+mss=
+for retry in $(seq 1 100); do
+	for remoteproc in /sys/class/remoteproc/remoteproc*; do
+		[ -r "$remoteproc/name" ] || continue
+		case "$(cat "$remoteproc/name")" in
+			*4080000*|*mss*|*modem*) mss=$remoteproc; break ;;
+		esac
+	done
+	[ -n "$mss" ] && break
+	sleep 0.1
+done
+[ -n "$mss" ] || { echo 'MSS remoteproc did not register' >&2; exit 1; }
+
+state=$(cat "$mss/state")
+[ "$state" != offline ] || echo start > "$mss/state"
+
+mac=
+for retry in $(seq 1 10); do
+	mac=$(/usr/lib/r11t/wifi-mac 2>/dev/null) && break
+	sleep 1
+done
+[ -n "$mac" ] || { echo 'Could not read WLAN MAC from modem DMS' >&2; exit 1; }
+[ -w /sys/module/ath10k_snoc/parameters/mac_addr ] || {
+	echo 'ath10k_snoc MAC parameter is unavailable' >&2
+	exit 1
+}
+printf '%s' "$mac" > /sys/module/ath10k_snoc/parameters/mac_addr
+
+for retry in $(seq 1 300); do
+	if [ -r /sys/class/net/wlan0/address ] && \
+	   [ "$(cat /sys/class/net/wlan0/address)" = "$mac" ]; then
+		exit 0
+	fi
+	sleep 0.1
+done
+echo 'wlan0 did not register with the factory MAC' >&2
+exit 1

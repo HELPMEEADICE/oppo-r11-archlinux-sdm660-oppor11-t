@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize OPPO R11T Qualcomm transport stack
+Requires=r11t-firmware.service
+After=r11t-firmware.service
+Before=r11t-rmtfs.service r11t-tqftpserv.service r11t-diag-router.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/r11t/load-qualcomm-transport
+
+[Install]
+WantedBy=r11t-hardware.target

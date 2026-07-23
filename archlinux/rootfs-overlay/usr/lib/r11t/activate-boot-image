@@ -1,0 +1,88 @@
+#!/bin/bash
+set -euo pipefail
+
+BOOT_SIZE=67108864
+image=
+confirm=0
+
+while (($#)); do
+	case "$1" in
+	--image) image=${2:-}; shift 2 ;;
+	--confirm) confirm=1; shift ;;
+	*) echo "usage: $0 --image boot.img --confirm" >&2; exit 2 ;;
+	esac
+done
+
+[[ $EUID -eq 0 ]] || { echo 'ERROR: run as root' >&2; exit 1; }
+[[ $confirm -eq 1 ]] || { echo 'ERROR: --confirm is required' >&2; exit 1; }
+[[ -f $image ]] || { echo "ERROR: image not found: $image" >&2; exit 1; }
+image=$(readlink -f "$image")
+image_size=$(stat -c %s "$image")
+(( image_size > 0 && image_size <= BOOT_SIZE && image_size % 4096 == 0 )) || {
+	echo 'ERROR: image size is not page-aligned or exceeds boot' >&2
+	exit 1
+}
+[[ $(dd if="$image" bs=8 count=1 status=none) == 'ANDROID!' ]] || {
+	echo 'ERROR: image does not have an Android boot header' >&2
+	exit 1
+}
+
+boot=${R11T_BOOT_DEVICE:-/dev/disk/by-partlabel/boot}
+bootbak=${R11T_BOOTBAK_DEVICE:-/dev/disk/by-partlabel/bootbak}
+state_root=${R11T_STATE_DIR:-/var/lib/r11t-state}
+snapshot_root=${R11T_SNAPSHOT_DIR:-/.snapshots}
+root_source=${R11T_ROOT_SOURCE:-/}
+for device in "$boot" "$bootbak"; do
+	[[ -b $device ]] || { echo "ERROR: missing $device" >&2; exit 1; }
+	[[ $(blockdev --getsize64 "$device") == "$BOOT_SIZE" ]] || {
+		echo "ERROR: unexpected partition size for $device" >&2
+		exit 1
+	}
+done
+mountpoint -q "$state_root" || {
+	echo "ERROR: cache-backed state directory is not mounted: $state_root" >&2
+	exit 1
+}
+mountpoint -q "$snapshot_root" || {
+	echo "ERROR: snapshot directory is not mounted: $snapshot_root" >&2
+	exit 1
+}
+
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+snapshot="pre-boot-$timestamp"
+state="$state_root/boot-images/$timestamp"
+mkdir -p "$state"
+
+btrfs subvolume snapshot -r "$root_source" "$snapshot_root/$snapshot"
+dd if="$boot" bs=4M status=none | zstd -T0 -3 -o "$state/boot.img.zst"
+boot_hash=$(sha256sum "$boot" | cut -d' ' -f1)
+
+dd if="$boot" of="$bootbak" bs=4M conv=fsync status=none
+bootbak_hash=$(sha256sum "$bootbak" | cut -d' ' -f1)
+[[ $boot_hash == "$bootbak_hash" ]] || {
+	echo 'ERROR: bootbak verification failed; boot was not modified' >&2
+	exit 1
+}
+
+image_hash=$(sha256sum "$image" | cut -d' ' -f1)
+dd if="$image" of="$boot" bs=4096 conv=fsync status=none
+pages=$((image_size / 4096))
+readback_hash=$(dd if="$boot" bs=4096 count="$pages" status=none | \
+	sha256sum | cut -d' ' -f1)
+[[ $image_hash == "$readback_hash" ]] || {
+	echo 'ERROR: new boot image readback failed; restore bootbak from recovery' >&2
+	exit 1
+}
+
+cat > "$state/manifest" <<EOF
+timestamp=$timestamp
+snapshot=$snapshot
+previous_boot_sha256=$boot_hash
+new_boot_sha256=$image_hash
+new_boot_size=$image_size
+kernel_release=$(uname -r)
+EOF
+sync
+echo "Activated boot image $image_hash"
+echo "Rollback snapshot: $snapshot"
+echo 'Reboot manually after reviewing the manifest.'

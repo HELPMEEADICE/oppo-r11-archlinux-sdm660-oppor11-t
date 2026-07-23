@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+for module in \
+	mdt_loader ocmem ubwc_config llcc-qcom qcom_aoss \
+	qcom-oledb-regulator drm_exec gpu-sched drm_gpuvm cec \
+	drm_display_helper drm_dp_aux_bus panel-samsung-s6e3fa3 msm \
+	rmi_core rmi_i2c bq27xxx_battery bq27xxx_battery_i2c qcom-spmi-rradc qcom_smbx \
+	led-class-flash led-class-multicolor leds-qcom-lpg \
+	ledtrig-pattern leds-qcom-flash; do
+	modprobe "$module"
+done
+
+for retry in $(seq 1 200); do
+	[ -e /dev/dri/card0 ] && [ -e /dev/dri/renderD128 ] && exit 0
+	sleep 0.1
+done
+echo 'DRM device did not register' >&2
+exit 1

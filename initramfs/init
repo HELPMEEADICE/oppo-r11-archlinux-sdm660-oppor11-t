@@ -121,7 +121,7 @@ chmod 0755 /bin/test_display
 
 cat > /bin/test_battery << 'EOF'
 #!/bin/busybox sh
-for module in bq27xxx_battery bq27xxx_battery_i2c; do
+for module in bq27xxx_battery bq27xxx_battery_i2c qcom-spmi-rradc qcom_smbx; do
 	if ! lsmod | grep -q "^${module} "; then
 		insmod "/lib/modules/${module}.ko" || exit 1
 	fi
@@ -149,6 +149,16 @@ for property in present status capacity capacity_level voltage_now current_now t
 	[ -r "$BATTERY/$property" ] || continue
 	printf "%s=" "$property"
 	cat "$BATTERY/$property"
+done
+
+for supply in /sys/class/power_supply/*charger; do
+	[ -d "$supply" ] || continue
+	echo "charger=${supply##*/}"
+	for property in online status health usb_type current_max current_now voltage_now; do
+		[ -r "$supply/$property" ] || continue
+		printf "charger_%s=" "$property"
+		cat "$supply/$property"
+	done
 done
 EOF
 chmod 0755 /bin/test_battery
@@ -713,7 +723,7 @@ EOF
 chmod 0755 /bin/test_wifi
 
 # Make the board's read-only fuel gauge available without a module manager.
-for module in bq27xxx_battery bq27xxx_battery_i2c; do
+for module in bq27xxx_battery bq27xxx_battery_i2c qcom-spmi-rradc qcom_smbx; do
 	insmod "/lib/modules/${module}.ko" 2>/dev/null || true
 done
 

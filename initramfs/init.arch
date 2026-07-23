@@ -1,0 +1,54 @@
+#!/bin/busybox sh
+set -eu
+
+/bin/busybox --install -s /bin
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+
+resolve_userdata() {
+	for retry in $(seq 1 150); do
+		for b in /sys/class/block/mmcblk*p*; do
+			[ -r "$b/uevent" ] || continue
+			partname=$(sed -n 's/^PARTNAME=//p' "$b/uevent")
+			[ "$partname" = userdata ] || continue
+			printf '/dev/%s\n' "${b##*/}"
+			return 0
+		done
+		sleep 0.1
+	done
+	return 1
+}
+
+emergency_shell() {
+	echo "Arch root mount failed: $*" >&2
+	mount -t configfs configfs /sys/kernel/config 2>/dev/null || true
+	g=/sys/kernel/config/usb_gadget/r11t-rescue
+	mkdir -p "$g/strings/0x409" "$g/configs/c.1/strings/0x409"
+	echo 0x18d1 > "$g/idVendor"
+	echo 0xd004 > "$g/idProduct"
+	echo r11t-root-failure > "$g/strings/0x409/serialnumber"
+	echo OPPO > "$g/strings/0x409/manufacturer"
+	echo 'R11T root mount failure' > "$g/strings/0x409/product"
+	echo 'Emergency ACM console' > "$g/configs/c.1/strings/0x409/configuration"
+	mkdir -p "$g/functions/acm.usb0"
+	[ -e "$g/configs/c.1/acm.usb0" ] || \
+		ln -s "$g/functions/acm.usb0" "$g/configs/c.1/acm.usb0"
+	set -- /sys/class/udc/*
+	[ -e "$1" ] && echo "${1##*/}" > "$g/UDC"
+	while [ ! -e /dev/ttyGS0 ]; do sleep 1; done
+	stty -F /dev/ttyGS0 raw -echo
+	exec setsid sh -c 'exec sh < /dev/ttyGS0 > /dev/ttyGS0 2>&1'
+}
+
+ROOT_DEV=$(resolve_userdata) || emergency_shell 'userdata partition not found'
+mkdir -p /newroot
+mount -t btrfs -o rw,noatime,compress=zstd:3,space_cache=v2,subvol=@ \
+	"$ROOT_DEV" /newroot || emergency_shell "cannot mount $ROOT_DEV subvol=@"
+[ -x /newroot/sbin/init ] || emergency_shell '/sbin/init is missing'
+
+mkdir -p /newroot/dev /newroot/proc /newroot/sys
+mount --move /dev /newroot/dev
+mount --move /proc /newroot/proc
+mount --move /sys /newroot/sys
+exec switch_root /newroot /sbin/init

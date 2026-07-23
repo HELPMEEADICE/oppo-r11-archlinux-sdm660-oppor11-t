@@ -1,0 +1,10 @@
+PARTLABEL=userdata  /                       btrfs  rw,noatime,compress=zstd:3,space_cache=v2,subvol=@                 0 0
+PARTLABEL=userdata  /home                   btrfs  rw,noatime,compress=zstd:3,space_cache=v2,subvol=@home             0 0
+PARTLABEL=userdata  /.snapshots             btrfs  rw,noatime,compress=zstd:3,space_cache=v2,subvol=@snapshots        0 0
+PARTLABEL=userdata  /var/log                 btrfs  rw,noatime,compress=zstd:3,space_cache=v2,subvol=@var_log          0 0
+PARTLABEL=userdata  /var/cache/pacman/pkg    btrfs  rw,noatime,compress=zstd:3,space_cache=v2,subvol=@pacman_cache     0 0
+PARTLABEL=cache     /var/lib/r11t-state      ext4   rw,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=5s 0 2
+PARTLABEL=vendor    /mnt/vendor              ext4   ro,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=5s 0 2
+PARTLABEL=modem     /mnt/modem               vfat   ro,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=5s 0 0
+PARTLABEL=persist   /mnt/persist             ext4   ro,noatime,nosuid,nodev,noexec,nofail,x-systemd.device-timeout=5s 0 2
+PARTLABEL=system    /srv/r11t-rescue         btrfs  ro,noatime,compress=zstd:3,space_cache=v2,subvol=@recovery,noauto,nofail 0 0

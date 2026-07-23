@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+firmware=/usr/lib/firmware
+modem=/mnt/modem/image
+
+[ -d "$modem" ] || { echo "Missing read-only modem firmware mount" >&2; exit 1; }
+mkdir -p "$firmware"
+ln -sfn "$modem" "$firmware/image"
+
+for name in mba.mbn modem.mdt adsp.mdt wlanmdsp.mbn; do
+	[ -f "$modem/$name" ] || { echo "Missing $modem/$name" >&2; exit 1; }
+	ln -sfn "$modem/$name" "$firmware/$name"
+done
+for image in modem adsp; do
+	for file in "$modem/$image".b*; do
+		[ -f "$file" ] || continue
+		ln -sfn "$file" "$firmware/${file##*/}"
+	done
+done
+[ ! -d "$modem/modem_pr" ] || ln -sfn "$modem/modem_pr" "$firmware/modem_pr"

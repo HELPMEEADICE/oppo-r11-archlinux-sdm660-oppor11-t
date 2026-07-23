@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Initialize OPPO R11T audio volume
+Exec=/usr/lib/r11t/set-initial-audio-volume
+OnlyShowIn=KDE;
+NoDisplay=true

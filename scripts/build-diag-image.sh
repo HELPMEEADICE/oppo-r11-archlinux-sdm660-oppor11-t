@@ -43,6 +43,9 @@ llvm-strip "$IR/bin/audio-jack-test"
 aarch64-linux-gnu-gcc -static -Os -Wall -Wextra -Werror \
 	-o "$IR/bin/audio-tone" "$SRC_INIT/audio-tone.c"
 llvm-strip "$IR/bin/audio-tone"
+aarch64-linux-gnu-gcc -static -Os -Wall -Wextra -Werror \
+	-o "$IR/bin/reboot-mode" "$SRC_INIT/reboot-mode.c"
+llvm-strip "$IR/bin/reboot-mode"
 TINYALSA_UTILS=${TINYALSA_UTILS:-/tmp/opencode/tinyalsa-r11t/utils}
 for tool in tinymix tinyplay tinycap; do
 	if [ -x "$TINYALSA_UTILS/$tool" ]; then
@@ -89,6 +92,8 @@ mods=(
 	# Read-only external fuel-gauge support
 	"$BUILD/drivers/power/supply/bq27xxx_battery.ko"
 	"$BUILD/drivers/power/supply/bq27xxx_battery_i2c.ko"
+	"$BUILD/drivers/iio/adc/qcom-spmi-rradc.ko"
+	"$BUILD/drivers/power/supply/qcom_smbx.ko"
 	# PM660L notification and camera flash LEDs
 	"$BUILD/drivers/leds/led-class-flash.ko"
 	"$BUILD/drivers/leds/led-class-multicolor.ko"

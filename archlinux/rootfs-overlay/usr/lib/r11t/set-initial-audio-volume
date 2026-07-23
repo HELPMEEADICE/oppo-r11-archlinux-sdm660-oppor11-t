@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+for retry in $(seq 1 600); do
+	if wpctl status 2>/dev/null | grep -Eq '\*.*(AK4376 Headphones|TFA9890 Speaker)'; then
+		wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.20
+		exit 0
+	fi
+	sleep 0.1
+done
+
+echo 'R11T audio sink did not become available' >&2
+exit 1

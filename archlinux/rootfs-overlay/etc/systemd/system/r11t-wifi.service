@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize OPPO R11T WCN3990 Wi-Fi
+Requires=r11t-transport.service r11t-rmtfs.service r11t-tqftpserv.service
+After=r11t-transport.service r11t-rmtfs.service r11t-tqftpserv.service r11t-diag-router.service
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/r11t/start-wifi
+
+[Install]
+WantedBy=r11t-hardware.target

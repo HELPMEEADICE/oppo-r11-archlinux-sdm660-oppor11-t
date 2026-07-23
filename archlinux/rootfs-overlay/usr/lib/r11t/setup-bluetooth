@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+for module in ecc ecdh_generic rfkill bluetooth btqca btintel btbcm btrtl \
+	crc-ccitt hci_uart; do
+	modprobe "$module"
+done
+for retry in $(seq 1 150); do
+	[ -d /sys/class/bluetooth/hci0 ] && break
+	sleep 0.1
+done
+[ -d /sys/class/bluetooth/hci0 ] || { echo 'hci0 did not register' >&2; exit 1; }
+sleep 0.5
+/usr/lib/r11t/bt-hci-test --configure-only \
+	/mnt/persist/bluetooth/.bt_nv.bin

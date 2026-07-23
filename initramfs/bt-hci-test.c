@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -307,6 +308,19 @@ int main(int argc, char **argv)
 	int fd;
 	int rc;
 	bdaddr_t persist_addr;
+	const char *persist_path = NULL;
+	bool configure_only = false;
+
+	if (argc == 3 && !strcmp(argv[1], "--configure-only")) {
+		configure_only = true;
+		persist_path = argv[2];
+	} else if (argc == 2) {
+		persist_path = argv[1];
+	} else if (argc != 1) {
+		fprintf(stderr, "usage: %s [--configure-only] [persist-bt-nv]\n",
+			argv[0]);
+		return 2;
+	}
 
 	fd = socket(AF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
 	if (fd < 0) {
@@ -336,14 +350,14 @@ int main(int argc, char **argv)
 
 	dev_id = dl->dev_req[0].dev_id;
 	free(dl);
-	if (argc > 1) {
+	if (persist_path) {
 		if (ioctl(fd, HCIDEVDOWN, dev_id) < 0 && errno != EALREADY &&
 		    errno != ENODEV) {
 			perror("HCIDEVDOWN");
 			close(fd);
 			return 1;
 		}
-		if (read_persist_address(argv[1], &persist_addr) < 0 ||
+		if (read_persist_address(persist_path, &persist_addr) < 0 ||
 		    set_public_address(dev_id, &persist_addr) < 0) {
 			close(fd);
 			return 1;
@@ -362,18 +376,19 @@ int main(int argc, char **argv)
 		di.dev_id = dev_id;
 		if (!ioctl(fd, HCIGETDEVINFO, &di) &&
 		    (di.flags & (1U << HCI_UP)) &&
-		    (argc <= 1 ||
+		    (!persist_path ||
 		     !memcmp(di.bdaddr.b, persist_addr.b, sizeof(di.bdaddr.b))))
 			break;
 		usleep(100000);
 	}
 	if (!(di.flags & (1U << HCI_UP)) ||
-	    (argc > 1 && memcmp(di.bdaddr.b, persist_addr.b, sizeof(di.bdaddr.b)))) {
+	    (persist_path && memcmp(di.bdaddr.b, persist_addr.b,
+				    sizeof(di.bdaddr.b)))) {
 		fprintf(stderr, "Controller did not power up with the persist address\n");
 		close(fd);
 		return 1;
 	}
-	if (argc > 1) {
+	if (persist_path) {
 		printf("configured_address=");
 		print_bdaddr(&persist_addr);
 	}
@@ -388,6 +403,10 @@ int main(int argc, char **argv)
 	print_bdaddr(&di.bdaddr);
 	printf("flags=0x%08x type=%u acl_mtu=%u acl_pkts=%u\n",
 	       di.flags, di.type, di.acl_mtu, di.acl_pkts);
+	if (configure_only) {
+		close(fd);
+		return 0;
+	}
 
 	ir = calloc(1, ir_size);
 	if (!ir) {

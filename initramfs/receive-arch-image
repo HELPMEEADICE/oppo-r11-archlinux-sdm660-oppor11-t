@@ -1,0 +1,94 @@
+#!/bin/busybox sh
+set -eu
+
+usage() {
+	echo "usage: $0 [--target system|userdata] --bytes N --sha256 HASH --confirm" >&2
+	exit 2
+}
+
+BYTES=
+EXPECTED_HASH=
+CONFIRM=0
+REQUESTED_TARGET=
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--target) REQUESTED_TARGET=${2:-}; shift 2 ;;
+	--bytes) BYTES=${2:-}; shift 2 ;;
+	--sha256) EXPECTED_HASH=${2:-}; shift 2 ;;
+	--confirm) CONFIRM=1; shift ;;
+	*) usage ;;
+	esac
+done
+
+[ "$CONFIRM" -eq 1 ] || { echo 'ERROR: --confirm is required' >&2; exit 1; }
+case " $(cat /proc/cmdline) " in
+	*' r11t.storage_write=1 '*) ;;
+	*) echo 'ERROR: this recovery image has storage writes disabled' >&2; exit 1 ;;
+esac
+case "$BYTES" in ''|*[!0-9]*) usage ;; esac
+case "$EXPECTED_HASH" in ''|*[!0-9a-f]*) usage ;; esac
+[ "${#EXPECTED_HASH}" -eq 64 ] || usage
+[ $((BYTES % 4096)) -eq 0 ] || {
+	echo 'ERROR: image size must be 4096-byte aligned' >&2
+	exit 1
+}
+
+resolve_part() {
+	name=$1
+	for block in /sys/class/block/mmcblk*p*; do
+		[ -r "$block/uevent" ] || continue
+		[ "$(sed -n 's/^PARTNAME=//p' "$block/uevent")" = "$name" ] || continue
+		echo "/dev/${block##*/}"
+		return 0
+	done
+	return 1
+}
+
+CONFIGURED_TARGET=system
+case " $(cat /proc/cmdline) " in
+	*' r11t.install_target=userdata '*)
+		CONFIGURED_TARGET=userdata
+		;;
+	*' r11t.install_target=all '*) CONFIGURED_TARGET=all ;;
+esac
+
+if [ "$CONFIGURED_TARGET" = all ]; then
+	TARGET=$REQUESTED_TARGET
+	case "$TARGET" in system|userdata) ;; *) usage ;; esac
+else
+	TARGET=$CONFIGURED_TARGET
+	[ -z "$REQUESTED_TARGET" ] || [ "$REQUESTED_TARGET" = "$TARGET" ] || {
+		echo "ERROR: recovery is configured only for $TARGET" >&2
+		exit 1
+	}
+fi
+case "$TARGET" in
+	system) EXPECTED_SECTORS=6799360 ;;
+	userdata) EXPECTED_SECTORS=111198175 ;;
+esac
+DEVICE=$(resolve_part "$TARGET")
+ACTUAL_SECTORS=$(cat "/sys/class/block/${DEVICE##*/}/size")
+[ "$ACTUAL_SECTORS" -eq "$EXPECTED_SECTORS" ] || {
+	echo "ERROR: unexpected $TARGET size: $ACTUAL_SECTORS sectors" >&2
+	exit 1
+}
+[ "$BYTES" -le $((EXPECTED_SECTORS * 512)) ] || {
+	echo "ERROR: image exceeds $TARGET" >&2
+	exit 1
+}
+
+echo "Listening on 172.31.66.1:5555 for $BYTES decompressed bytes"
+echo "Target: $TARGET ($DEVICE)"
+export LD_LIBRARY_PATH=/lib
+PAGES=$((BYTES / 4096))
+nc -l -p 5555 | zstd -d -c | \
+	dd of="$DEVICE" bs=4096 count="$PAGES" conv=fsync
+sync
+
+READBACK_HASH=$(dd if="$DEVICE" bs=4096 count="$PAGES" status=none | \
+	sha256sum | cut -d' ' -f1)
+[ "$READBACK_HASH" = "$EXPECTED_HASH" ] || {
+	echo "ERROR: readback mismatch: $READBACK_HASH" >&2
+	exit 1
+}
+echo "Verified $TARGET image: $READBACK_HASH"

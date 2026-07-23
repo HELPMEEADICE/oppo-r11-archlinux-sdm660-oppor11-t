@@ -1,0 +1,13 @@
+[Unit]
+Description=Grow OPPO R11T Btrfs root to the userdata partition
+After=local-fs.target
+Before=r11t-hardware.target
+ConditionPathExists=!/var/lib/r11t-state/root-grown
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/btrfs filesystem resize max /
+ExecStart=/usr/bin/touch /var/lib/r11t-state/root-grown
+
+[Install]
+WantedBy=multi-user.target

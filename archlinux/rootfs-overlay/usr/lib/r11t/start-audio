@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+for module in \
+	qcom_q6v5_pas pinctrl-lpass-lpi pinctrl-sdm660-lpass-lpi \
+	soundcore snd snd-timer snd-pcm snd-compress snd-soc-core \
+	snd-soc-qcom-common snd-q6dsp-common apr q6core q6afe \
+	q6afe-clocks q6afe-dai q6adm q6routing q6asm q6asm-dai \
+	snd-soc-msm8916-digital snd-soc-msm8916-analog \
+	snd-soc-ak4375 snd-soc-tfa989x snd-soc-sdm660-int; do
+	modprobe "$module"
+done
+
+adsp=
+for retry in $(seq 1 600); do
+	for remoteproc in /sys/class/remoteproc/remoteproc*; do
+		[ -r "$remoteproc/name" ] || continue
+		case "$(cat "$remoteproc/name")" in
+			*adsp*) adsp=$remoteproc; break ;;
+		esac
+	done
+	[ -n "$adsp" ] && break
+	sleep 0.1
+done
+[ -n "$adsp" ] || { echo 'ADSP remoteproc did not register' >&2; exit 1; }
+[ "$(cat "$adsp/state")" != offline ] || echo start > "$adsp/state"
+
+for retry in $(seq 1 600); do
+	grep -q 'OPPO R11T' /proc/asound/cards 2>/dev/null && exit 0
+	sleep 0.1
+done
+echo 'R11T ALSA card did not register' >&2
+exit 1

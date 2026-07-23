@@ -1,0 +1,4 @@
+Server = https://mirrors.ustc.edu.cn/archlinuxarm/$arch/$repo
+Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxarm/$arch/$repo
+Server = https://mirrors.bfsu.edu.cn/archlinuxarm/$arch/$repo
+Server = http://mirror.archlinuxarm.org/$arch/$repo

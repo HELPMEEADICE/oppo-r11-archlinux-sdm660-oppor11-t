@@ -6,6 +6,8 @@
 !initramfs/**
 !scripts/
 !scripts/**
+!archlinux/
+!archlinux/**
 
 # Rebuild these static diagnostic binaries from their adjacent sources.
 initramfs/gpu-msm-probe
