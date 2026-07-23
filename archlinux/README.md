@@ -30,6 +30,10 @@ continue to carry the kernel, DTB, and initramfs.
    `scripts/install-arch-rootfs.sh` and `scripts/prepare-rescue-filesystem.sh`.
 2. Build and verify the production boot image with
    `scripts/build-arch-boot-image.sh`.
+   `scripts/build-arch-boot-image-gcc.sh` builds a separate native-GCC image
+   and complete module archive under `linux/build-gcc`. Its
+   `-sdm660-gcc+` kernel release keeps GCC modules separate from the Clang
+   rollback image.
 3. Build `scripts/build-installer-image.sh --target all --write`, flash only the
    recovery partition, and boot it.
 4. Run `scripts/configure-installer-network.sh` on the host.
